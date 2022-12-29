@@ -29,6 +29,7 @@ def install():
         ("Duplicate symmetrical", str_duplicateSym),
         ("-----", None),
         ("RBF Manager", str_rbf_manager_ui),
+        ("PoseDriver Manager", str_posedriver_ui),
         ("SDK Manager (BETA)", str_SDK_manager_ui),
         ("-----", None),
         ("Space Manager", str_space_manager),
@@ -185,6 +186,11 @@ rigbits.duplicateSym()
 str_rbf_manager_ui = """
 from mgear.rigbits import rbf_manager_ui
 rbf_manager_ui.show()
+"""
+
+str_posedriver_ui = """
+from mgear.rigbits import posedriver_ui
+posedriver_ui.show()
 """
 
 str_SDK_manager_ui = """

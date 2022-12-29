@@ -19,8 +19,10 @@ import maya.cmds as mc
 # RBF setups
 if PY2:
     import weightNode_io
+    import posedriver_io
 else:
     from . import weightNode_io
+    from . import posedriver_io
 
 # debug
 # reload(weightNode_io)
@@ -30,7 +32,8 @@ else:
 RBF_FILE_EXTENSION = ".rbf"
 
 # Additional node support should be added here
-RBF_MODULES = {"weightDriver": weightNode_io}
+RBF_MODULES = {"weightDriver": weightNode_io,
+               "poseDriver": posedriver_io}
 
 
 # =============================================================================

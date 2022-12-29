@@ -52,14 +52,15 @@ Attributes:
 Deleted Attributes:
     RBF_MODULES (dict): of supported rbf modules
 
-__author__ = "Rafael Villar"
-__email__ = "rav@ravrigs.com"
-__credits__ = ["Miquel Campos", "Ingo Clemens"]
+__author__ = "Takayoshi Matsumoto"
+__email__ = "yamahigashi@gmail.com"
+__credits__ = ["Rafael Villar", "Miquel Campos", "Ingo Clemens"]
 
 """
 # python
 import imp
 import os
+import sys
 from functools import partial
 
 # core
@@ -67,19 +68,44 @@ import maya.cmds as mc
 import pymel.core as pm
 import maya.OpenMaya as om
 import maya.OpenMayaUI as mui
+from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 
 # mgear
 import mgear
 from mgear.core import pyqt
 import mgear.core.string as mString
 from mgear.core import anim_utils
-from mgear.vendor.Qt import QtWidgets, QtCore, QtCompat
-from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
+
+from mgear.vendor.Qt import (
+    QtWidgets,  # type: ignore
+    QtCore,  # type: ignore
+    QtCompat,  # type: ignore
+)
+
+
+if sys.version_info > (3, 0):
+    from typing import TYPE_CHECKING
+
+    if TYPE_CHECKING:
+        from typing import (
+            Text,  # noqa
+            List,  # noqa
+            Tuple,  # noqa
+        )
+        from mgear.vendor.Qt import QtGui  # type: ignore  # noqa
 
 # rbf
 from . import rbf_io
 from . import rbf_node
+from . import rbf_manager_ui
+from .posedriver_io import RBFNode  # noqa
+# from . import weightNode_io
 from .six import PY2
+
+from logging import getLogger, WARN, DEBUG, INFO  # noqa
+
+logger = getLogger(__name__)
+logger.setLevel(INFO)
 
 # debug
 # reload(rbf_io)
@@ -88,10 +114,10 @@ from .six import PY2
 # =============================================================================
 # Constants
 # =============================================================================
-__version__ = "1.0.2"
+__version__ = "0.1.0"
 
 _mgear_version = mgear.getVersion()
-TOOL_NAME = "RBF Manager"
+TOOL_NAME = "PoseDriver Manager"
 TOOL_TITLE = "{} v{} | mGear {}".format(TOOL_NAME, __version__, _mgear_version)
 
 DRIVEN_SUFFIX = rbf_node.DRIVEN_SUFFIX
@@ -113,7 +139,7 @@ def testFunctions(*args):
     Args:
         *args: Description
     """
-    print('!!', args)
+    print("!!", args)
 
 
 def getPlugAttrs(nodes, attrType="all"):
@@ -155,35 +181,10 @@ def existing_rbf_setup(node):
     Returns:
         list: of the rbftype assiociated with the node
     """
-    connected_nodes = mc.listConnections(node,
-                                         destination=True,
-                                         shapes=True,
-                                         scn=True) or []
+    connected_nodes = mc.listConnections(node, destination=True, shapes=True, scn=True) or []
     connected_node_types = set(mc.nodeType(x) for x in connected_nodes)
     rbf_node_types = set(rbf_io.RBF_MODULES.keys())
     return list(connected_node_types.intersection(rbf_node_types))
-
-
-def sortRBF(name, rbfType=None):
-    """Get node wrapped in RBFNode class based on the type of node
-
-    Args:
-        name (str): name of the RBFNode in scene
-        rbfType (str, optional): type of RBF to get instance from
-
-    Returns:
-        RBFNode: instance of RBFNode
-    """
-    if mc.objExists(name):
-        if mc.nodeType(name) in rbf_io.RBF_MODULES:
-            if rbfType is None:
-                rbfType = mc.nodeType(name)
-            return rbf_io.RBF_MODULES[rbfType].RBFNode(name)
-
-    if rbfType is not None:
-        return rbf_io.RBF_MODULES[rbfType].RBFNode(name)
-
-    raise Exception("not found RBFNode")
 
 
 def getEnvironModules():
@@ -196,12 +197,10 @@ def getEnvironModules():
     extraModulePath = os.environ.get(MGEAR_EXTRA_ENVIRON, None)
     if extraModulePath is None or not os.path.exists(extraModulePath):
         return None
-    exModule = imp.load_source(MGEAR_EXTRA_ENVIRON,
-                               os.path.abspath(extraModulePath))
+    exModule = imp.load_source(MGEAR_EXTRA_ENVIRON, os.path.abspath(extraModulePath))
     additionalFuncDict = getattr(exModule, EXTRA_MODULE_DICT, None)
     if additionalFuncDict is None:
-        mc.warning("'{}' not found in {}".format(EXTRA_MODULE_DICT,
-                                                 extraModulePath))
+        mc.warning("'{}' not found in {}".format(EXTRA_MODULE_DICT, extraModulePath))
         print("No additional menu items added to {}".format(TOOL_NAME))
     return additionalFuncDict
 
@@ -222,6 +221,7 @@ def selectNode(name):
 # UI General Functions
 # =============================================================================
 
+
 def getControlAttrWidget(nodeAttr, label=""):
     """get a cmds.attrControlGrp wrapped in a qtWidget, still connected
     to the specified attr
@@ -233,20 +233,16 @@ def getControlAttrWidget(nodeAttr, label=""):
     Returns:
         QtWidget: qwidget created from attrControlGrp
     """
-    mAttrFeild = mc.attrControlGrp(attribute=nodeAttr,
-                                   label=label,
-                                   po=True)
+    mAttrFeild = mc.attrControlGrp(attribute=nodeAttr, label=label, po=True)
     ptr = mui.MQtUtil.findControl(mAttrFeild)
     if PY2:
-        controlWidget = QtCompat.wrapInstance(long(ptr), base=QtWidgets.QWidget)
+        controlWidget = QtCompat.wrapInstance(long(ptr), base=QtWidgets.QWidget)  # type: ignore  # noqa
     else:
         controlWidget = QtCompat.wrapInstance(int(ptr), base=QtWidgets.QWidget)
     controlWidget.setContentsMargins(0, 0, 0, 0)
     controlWidget.setMinimumWidth(0)
-    attrEdit = [wdgt for wdgt in controlWidget.children()
-                if type(wdgt) == QtWidgets.QLineEdit]
-    [wdgt.setParent(attrEdit[0]) for wdgt in controlWidget.children()
-     if type(wdgt) == QtCore.QObject]
+    attrEdit = [wdgt for wdgt in controlWidget.children() if type(wdgt) == QtWidgets.QLineEdit]
+    [wdgt.setParent(attrEdit[0]) for wdgt in controlWidget.children() if type(wdgt) == QtCore.QObject]
 
     attrEdit[0].setParent(None)
     controlWidget.setParent(attrEdit[0])
@@ -288,14 +284,14 @@ def show(dockable=True, newSceneCallBack=True, *args):
         *args: Description
     """
     global RBF_UI
-    if 'RBF_UI' in globals():
+    if "RBF_UI" in globals():
         try:
-            RBF_UI.close()
+            RBF_UI.close()  # type: ignore
         except TypeError:
             pass
-    RBF_UI = RBFManagerUI(parent=pyqt.maya_main_window(),
-                          newSceneCallBack=newSceneCallBack)
+    RBF_UI = PoseDriverManagerUI(parent=pyqt.maya_main_window(), newSceneCallBack=newSceneCallBack)
     RBF_UI.show(dockable=True)
+
     return RBF_UI
 
 
@@ -329,8 +325,7 @@ def promptAcceptance(parent, descriptionA, descriptionB):
     msgBox = QtWidgets.QMessageBox(parent)
     msgBox.setText(descriptionA)
     msgBox.setInformativeText(descriptionB)
-    msgBox.setStandardButtons(QtWidgets.QMessageBox.Ok |
-                              QtWidgets.QMessageBox.Cancel)
+    msgBox.setStandardButtons(QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel)
     msgBox.setDefaultButton(QtWidgets.QMessageBox.Cancel)
     decision = msgBox.exec_()
     return decision
@@ -353,9 +348,117 @@ class ClickableLineEdit(QtWidgets.QLineEdit):
             super(ClickableLineEdit, self).mousePressEvent(event)
 
 
-class TabBar(QtWidgets.QTabBar):
-    """Subclass to get a taller tab widget, for readability
+class ClickableListEdit(QtWidgets.QGroupBox):
+
     """
+
+    Attributes:
+        clicked (QtCore.Signal): emitted when clicked
+    """
+
+    clicked = QtCore.Signal(str)
+    genericWidgetHight = 24
+
+    def __init__(self, parent=None, label=""):
+
+        super(ClickableListEdit, self).__init__(parent)
+
+        self.gridLayout = QtWidgets.QGridLayout(self)
+        self.hLayout = QtWidgets.QHBoxLayout()
+        self.vLayout = QtWidgets.QVBoxLayout()
+        self.vLayout2 = QtWidgets.QVBoxLayout()
+
+        self.nodeLabel = QtWidgets.QLabel(label)
+        self.nodeLabel.setFixedWidth(100)
+        self.vLayout.addWidget(self.nodeLabel)
+
+        self.listWidget = QtWidgets.QListWidget(self)
+        self.listWidget.setDragDropOverwriteMode(True)
+        self.listWidget.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.listWidget.setDefaultDropAction(QtCore.Qt.MoveAction)
+        self.listWidget.setAlternatingRowColors(True)
+        self.listWidget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.listWidget.setSelectionRectVisible(False)
+        self.hLayout.addWidget(self.listWidget)
+
+        self.hLayout.addLayout(self.vLayout2)
+
+        self.addButton = QtWidgets.QPushButton("Add")
+        self.addButton.setFixedHeight(self.genericWidgetHight)
+        self.vLayout2.addWidget(self.addButton)
+
+        self.removeButton = QtWidgets.QPushButton("Remove")
+        self.removeButton.setFixedHeight(self.genericWidgetHight)
+        self.vLayout2.addWidget(self.removeButton)
+
+        spacerItem = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        self.vLayout2.addItem(spacerItem)
+        self.vLayout.addLayout(self.hLayout)
+
+        self.gridLayout.addLayout(self.vLayout, 0, 0, 1, 1)
+
+    def mousePressEvent(self, event):
+        # type: (QtGui.QMouseEvent) -> None
+        """Event handler to select item in the scene."""
+
+        if event.button() == QtCore.Qt.LeftButton:
+            item = self.listWidget.currentItem()
+            if item is not None:
+                text = item.text()
+                self.clicked.emit(text)
+
+        else:
+            super(ClickableListEdit, self).mousePressEvent(event)
+
+    def setText(self, items):
+        # type: (List[Text]) -> None
+        """Set list item"""
+
+        for item in items:
+            print(f"{item=}")
+            dup = self.listWidget.findItems(item, QtCore.Qt.MatchExactly)
+            if not dup:
+                self.listWidget.addItems((item,))
+
+    def setItems(self, items):
+        # type: (List[Text]) -> None
+        """Set list item"""
+
+        for item in items:
+            dup = self.listWidget.findItems(item, QtCore.Qt.MatchExactly)
+            if not dup:
+                self.listWidget.addItems((item,))
+
+    def removeItem(self):
+        # type: () -> None
+        """Remove current item"""
+
+        row = self.listWidget.currentRow()
+        if row == -1:
+            row = self.listWidget.count() - 1
+
+        if row < 0:
+            return
+
+        self.listWidget.takeItem(row)
+
+    def text(self):
+        # type: () -> List[Text]
+        """Returns all items as list of text"""
+        res = []
+        for row in range(self.listWidget.count()):
+            res.append(self.listWidget.item(row).text())
+
+        return res
+
+    def clear(self):
+        # type: () -> None
+        """Clear all entries"""
+        return self.listWidget.clear()
+
+
+class TabBar(QtWidgets.QTabBar):
+    """Subclass to get a taller tab widget, for readability"""
 
     def __init__(self):
         super(TabBar, self).__init__()
@@ -377,7 +480,7 @@ class RBFSetupInput(QtWidgets.QDialog):
         setupLineEdit (QLineEdit): name selected by user
     """
 
-    def __init__(self, listValues, setupField=True, parent=None):
+    def __init__(self, listValues=(), setupField=True, parent=None):
         """setup the UI widgets
 
         Args:
@@ -390,7 +493,7 @@ class RBFSetupInput(QtWidgets.QDialog):
         mainLayout = QtWidgets.QVBoxLayout()
         self.setLayout(mainLayout)
         self.setupField = setupField
-        self.result = []
+        self.result = None
         #  --------------------------------------------------------------------
         setupLayout = QtWidgets.QHBoxLayout()
         setupLabel = QtWidgets.QLabel("Specify Setup Name")
@@ -400,18 +503,6 @@ class RBFSetupInput(QtWidgets.QDialog):
         setupLayout.addWidget(self.setupLineEdit)
         if setupField:
             mainLayout.addLayout(setupLayout)
-        #  --------------------------------------------------------------------
-        drivenLayout = QtWidgets.QVBoxLayout()
-        drivenLabel = QtWidgets.QLabel("Select Driven Attributes")
-        self.drivenListWidget = QtWidgets.QListWidget()
-        self.drivenListWidget.setToolTip("Right Click for sorting!")
-        selType = QtWidgets.QAbstractItemView.ExtendedSelection
-        self.drivenListWidget.setSelectionMode(selType)
-        self.drivenListWidget.addItems(listValues)
-        self.drivenListWidget.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        drivenLayout.addWidget(drivenLabel)
-        drivenLayout.addWidget(self.drivenListWidget)
-        mainLayout.addLayout(drivenLayout)
         #  --------------------------------------------------------------------
         # buttonLayout = QtWidgets.QHBoxLayout()
         self.okButton = QtWidgets.QPushButton("Ok")
@@ -428,15 +519,10 @@ class RBFSetupInput(QtWidgets.QDialog):
         if setupName == "" and self.setupField:
             genericWarning(self, "Enter Setup Name")
             return
-        selectedAttrs = self.drivenListWidget.selectedItems()
-        if not selectedAttrs:
-            genericWarning(self, "Select at least one attribute")
-            return
-        driverAttrs = [item.text().split(".")[1] for item in selectedAttrs]
-        self.result.append(setupName)
-        self.result.append(driverAttrs)
+
+        self.result = setupName
         self.accept()
-        return self.result
+        return setupName
 
     def getValue(self):
         """convenience to get result
@@ -456,7 +542,7 @@ class RBFSetupInput(QtWidgets.QDialog):
         return self.result
 
 
-class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
+class PoseDriverManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
 
     """A manager for creating, mirroring, importing/exporting poses created
     for RBF type nodes.
@@ -477,7 +563,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
     mousePosition = QtCore.Signal(int, int)
 
     def __init__(self, parent=None, hideMenuBar=False, newSceneCallBack=True):
-        super(RBFManagerUI, self).__init__(parent=parent)
+        super(PoseDriverManagerUI, self).__init__(parent=parent)
         # UI info -------------------------------------------------------------
         self.callBackID = None
         self.setWindowTitle(TOOL_TITLE)
@@ -486,8 +572,8 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         # class info ----------------------------------------------------------
         self.absWorld = True
         self.zeroedDefaults = True
-        self.currentRBFSetupNodes = []
-        self.allSetupsInfo = None
+        self.currentRBFSetupNodes = []  # type: List[RBFNode]
+        self.allSetupsInfo = {}
         self.setMenuBar(self.createMenuBar(hideMenuBar=hideMenuBar))
         self.setCentralWidget(self.createCentralWidget())
         self.centralWidget().setMouseTracking(True)
@@ -511,8 +597,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             pass
 
     def removeSceneCallback(self):
-        """remove the callback associated witht he UI, quietly fail.
-        """
+        """remove the callback associated witht he UI, quietly fail."""
         try:
             om.MSceneMessage.removeCallback(self.callBackID)
         except Exception as e:
@@ -520,8 +605,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             print(e)
 
     def newSceneCallBack(self):
-        """create a new scene callback to refresh the UI when scene changes.
-        """
+        """create a new scene callback to refresh the UI when scene changes."""
         callBackType = om.MSceneMessage.kSceneUpdate
         try:
             func = self.callBackFunc
@@ -533,15 +617,17 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
 
     # general functions -------------------------------------------------------
     def getSelectedSetup(self):
+        # type: () -> Tuple[Text, Text]
         """return the string name of the selected setup from user and type
 
         Returns:
             str, str: name, nodeType
         """
+
         selectedSetup = self.rbf_cbox.currentText()
         if selectedSetup.startswith("New"):
-            setupType = selectedSetup.split(" ")[1]
-            return None, setupType
+            return None, "poseDriver"
+
         else:
             return selectedSetup, self.currentRBFSetupNodes[0].rbfType
 
@@ -556,39 +642,27 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             drivenNodes.extend(rbfNode.getDrivenNode)
         return drivenNodes
 
-    def getUserSetupInfo(self, drivenNode, drivenAttrs, setupField=True):
+    def getUserSetupInfo(self, setupField=True):
         """prompt the user for information needed to create setup or add
         rbf node to existing setup
 
         Args:
-            drivenAttrs (list): of attrs to display to user to select from
             setupField (bool, optional): should the user be asked to input
             a name for setup
 
         Returns:
-            list: list of selected attrs, name specified
+            str: name specified
         """
-        userInputWdgt = RBFSetupInput(drivenAttrs,
-                                      setupField=setupField,
-                                      parent=self)
-        partialObj = partial(self.attrListMenu,
-                             userInputWdgt.drivenListWidget,
-                             "",
-                             nodeToQuery=drivenNode)
-        customMenu = userInputWdgt.drivenListWidget.customContextMenuRequested
-        customMenu.connect(partialObj)
+        userInputWdgt = RBFSetupInput(setupField=setupField, parent=self)
         results = userInputWdgt.exec_()
         if results:
-            return results[0], results[1]
+            return results
         else:
-            return None, None
+            return None
 
     def __deleteSetup(self):
-        decision = promptAcceptance(self,
-                                    "Delete current Setup?",
-                                    "This will delete all RBF nodes in setup.")
-        if decision in [QtWidgets.QMessageBox.Discard,
-                        QtWidgets.QMessageBox.Cancel]:
+        decision = promptAcceptance(self, "Delete current Setup?", "This will delete all RBF nodes in setup.")
+        if decision in [QtWidgets.QMessageBox.Discard, QtWidgets.QMessageBox.Cancel]:
             return
         self.deleteSetup()
 
@@ -610,41 +684,6 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             mc.delete(rbfNode.transformNode)
         self.refresh()
 
-    def removeRBFFromSetup(self, drivenWidgetIndex):
-        """remove RBF tab from setup. Delete driven group, attrs and clean up
-
-        Args:
-            drivenWidgetIndex (QWidget): parent widget that houses the contents
-            and info of the rbf node
-
-        Returns:
-            n/a: n/a
-        """
-        decision = promptAcceptance(self,
-                                    "Are you sure you want to remove node?",
-                                    "This will delete the RBF & driven node.")
-        if decision in [QtWidgets.QMessageBox.Discard,
-                        QtWidgets.QMessageBox.Cancel]:
-            return
-        drivenWidget = self.rbfTabWidget.widget(drivenWidgetIndex)
-        self.rbfTabWidget.removeTab(drivenWidgetIndex)
-        rbfNode = getattr(drivenWidget, "rbfNode")
-        self.__deleteAssociatedWidgets(drivenWidget, attrName="associated")
-        drivenWidget.deleteLater()
-        drivenNode = rbfNode.getDrivenNode()
-        rbfNode.deleteRBFToggleAttr()
-        if drivenNode and drivenNode[0].endswith(rbf_node.DRIVEN_SUFFIX):
-            rbf_node.removeDrivenGroup(drivenNode[0])
-        mc.delete(rbfNode.transformNode)
-        self.currentRBFSetupNodes.remove(rbfNode)
-        if self.rbfTabWidget.count() == 0:
-            self.refresh(rbfSelection=True,
-                         driverSelection=True,
-                         drivenSelection=True,
-                         currentRBFSetupNodes=True)
-        else:
-            self.refreshAllTables()
-
     def addRBFToSetup(self):
         """query the user in case of a new setup or adding additional RBFs to
         existing.
@@ -652,110 +691,65 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         Returns:
             TYPE: Description
         """
+
         # TODO cut this function down to size
-        driverNode = self.driverLineEdit.text()
-        driverControl = self.controlLineEdit.text()
+        sourceNodes = self.driverLineEdit.text()
+        drivenNodes = self.controlLineEdit.text()
+
         # take every opportunity to return to avoid unneeded processes
-        if driverNode == "":
+        if not sourceNodes or not drivenNodes:
             return
-        selectedAttrItems = self.driver_attributes_widget.selectedItems()
-        if not selectedAttrItems:
-            return
-        driverAttrs = [item.text().split(".")[1] for item in selectedAttrItems]
-        drivenNode = mc.ls(sl=True)
-        # This does prevents a driver to be its own driven
-        if not drivenNode or drivenNode[0] == driverNode:
-            genericWarning(self, "Select Node to be driven!")
-            return
-        drivenNode = drivenNode[0]
-        drivenType = mc.nodeType(drivenNode)
-        # smart display all when needed
-        if drivenType in ["transform", "joint"]:
-            attrType = "keyable"
-        else:
-            attrType = "all"
 
-        drivenNode_name = drivenNode
-        if drivenType in ["transform", "joint"]:
-            drivenNode_name = rbf_node.get_driven_group_name(drivenNode)
-
-        # check if there is an existing rbf node attached
-        if mc.objExists(drivenNode_name):
-            if existing_rbf_setup(drivenNode_name):
-                msg = "Node is already driven by an RBF Setup."
-                genericWarning(self, msg)
-                return
-
-        availableAttrs = getPlugAttrs([drivenNode], attrType=attrType)
         setupName, rbfType = self.getSelectedSetup()
-        # if a setup has already been named or starting new
         if setupName is None:
-            setupName, drivenAttrs = self.getUserSetupInfo(drivenNode,
-                                                           availableAttrs)
-        else:
-            tmpName, drivenAttrs = self.getUserSetupInfo(drivenNode,
-                                                         availableAttrs,
-                                                         setupField=False)
-        if not drivenAttrs:
-            return
-        parentNode = False
+            setupName = self.getUserSetupInfo()
 
-        if drivenType in ["transform", "joint"]:
-            parentNode = True
-            drivenNode = rbf_node.addDrivenGroup(drivenNode)
+        # TODO: rotation or translation
+        driverAttrs = "rotation"
+        # drivenAttrs = "rotation"
+
         # create RBFNode instance, apply settings
-        rbfNode = sortRBF(drivenNode, rbfType=rbfType)
+        rbfNode = rbf_manager_ui.sortRBF(setupName, rbfType="poseDriver")  # type: RBFNode
+        rbfNode.create(sourceNodes, drivenNodes)
         rbfNode.setSetupName(setupName)
-        rbfNode.setDriverControlAttr(driverControl)
-        rbfNode.setDriverNode(driverNode, driverAttrs)
-        defaultVals = rbfNode.setDrivenNode(drivenNode,
-                                            drivenAttrs,
-                                            parent=parentNode)
+        rbfNode.setDriverControlAttr(drivenNodes)
+        rbfNode.setDriverNode(sourceNodes, driverAttrs)
+        defaultVals = rbfNode.setDrivenNode(drivenNodes)
+
         # Check if there any preexisting nodes in setup, if so copy pose index
         if self.currentRBFSetupNodes:
             currentRbfs = self.currentRBFSetupNodes[0]
-            print("Syncing poses indices from  {} >> {}".format(currentRbfs,
-                                                                rbfNode))
+            print("Syncing poses indices from  {} >> {}".format(currentRbfs, rbfNode))
             rbfNode.syncPoseIndices(self.currentRBFSetupNodes[0])
+
         else:
-            if self.zeroedDefaults:
-                rbfNode.applyDefaultPose()
-
-            else:
-
-                poseInputs = rbf_node.getMultipleAttrs(driverNode, driverAttrs)
-
-                rbfNode.addPose(poseInput=poseInputs,
-                                poseValue=defaultVals[1::2])
+            rbfNode.addPose()
             self.populateDriverInfo(rbfNode, rbfNode.getNodeInfo())
+
         # add newly created RBFNode to list of current
         self.currentRBFSetupNodes.append(rbfNode)
+
         # get info to populate the UI with it
-        weightInfo = rbfNode.getNodeInfo()
-        tabDrivenWidget = self.addNewTab(rbfNode)
-        self.populateDrivenWidgetInfo(tabDrivenWidget, weightInfo, rbfNode)
+        # weightInfo = rbfNode.getNodeInfo()
         self.refreshRbfSetupList(setToSelection=setupName)
         self.lockDriverWidgets()
-        if driverControl:
-            mc.select(driverControl)
+
+        mc.select(drivenNodes)
 
     def refreshAllTables(self):
         """Convenience function to refresh all the tables on all the tabs
         with latest information.
         """
+
         weightInfo = None
         rbfNode = None
-        for index in range(self.rbfTabWidget.count()):
-            drivenWidget = self.rbfTabWidget.widget(index)
-            drivenNodeName = drivenWidget.drivenLineEdit.text()
-            for rbfNode in self.currentRBFSetupNodes:
-                drivenNodes = rbfNode.getDrivenNode()
-                if drivenNodes and drivenNodes[0] != drivenNodeName:
-                    continue
-                weightInfo = rbfNode.getNodeInfo()
-                self.setDrivenTable(drivenWidget, rbfNode, weightInfo)
-        if weightInfo and rbfNode:
-            self.populateDriverInfo(rbfNode, weightInfo)
+
+        for rbfNode in self.currentRBFSetupNodes:
+            weightInfo = rbfNode.getNodeInfo()
+
+            print(f"{weightInfo=}, {rbfNode=}")
+            if weightInfo and rbfNode:
+                self.populateDriverInfo(rbfNode, weightInfo)
 
     def deletePose(self):
         """delete a pose from the UI and all the RBFNodes in the setup.
@@ -764,17 +758,9 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             n/a: n/a
         """
         driverRow = self.driverPoseTableWidget.currentRow()
-        drivenWidget = self.rbfTabWidget.currentWidget()
-        drivenTableWidget = getattr(drivenWidget, "tableWidget")
-        drivenRow = drivenTableWidget.currentRow()
-        # TODO if one is allow syncing of nodes of different lengths
-        # it should be done here
-        if drivenRow != driverRow or drivenRow == -1:
-            genericWarning(self, "Select Pose # to be deleted.")
-            return
-
         for rbfNode in self.currentRBFSetupNodes:
-            rbfNode.deletePose(indexToPop=drivenRow)
+            rbfNode.deletePose(indexToPop=driverRow)
+
         self.refreshAllTables()
 
     def editPose(self):
@@ -786,22 +772,16 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         rbfNodes = self.currentRBFSetupNodes
         if not rbfNodes:
             return
+
         driverRow = self.driverPoseTableWidget.currentRow()
-        drivenWidget = self.rbfTabWidget.currentWidget()
-        drivenTableWidget = getattr(drivenWidget, "tableWidget")
-        drivenRow = drivenTableWidget.currentRow()
-        if drivenRow != driverRow or drivenRow == -1:
-            genericWarning(self, "Select Pose # to be Edited.")
-            return
-        driverNode = rbfNodes[0].getDriverNode()[0]
+        driverNodes = rbfNodes[0].getDriverNode()
         driverAttrs = rbfNodes[0].getDriverNodeAttributes()
-        poseInputs = rbf_node.getMultipleAttrs(driverNode, driverAttrs)
+        poseInputs = rbf_node.getMultipleAttrs(driverNodes, driverAttrs)
+
         for rbfNode in rbfNodes:
             poseValues = rbfNode.getPoseValues(resetDriven=True)
-            rbfNode.addPose(poseInput=poseInputs,
-                            poseValue=poseValues,
-                            posesIndex=drivenRow)
-            rbfNode.forceEvaluation()
+            rbfNode.addPose(poseInput=poseInputs, poseValue=poseValues, posesIndex=driverRow)
+
         self.refreshAllTables()
 
     def addPose(self):
@@ -813,13 +793,15 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         rbfNodes = self.currentRBFSetupNodes
         if not rbfNodes:
             return
+
         driverNode = rbfNodes[0].getDriverNode()[0]
         driverAttrs = rbfNodes[0].getDriverNodeAttributes()
         poseInputs = rbf_node.getMultipleAttrs(driverNode, driverAttrs)
+
         for rbfNode in rbfNodes:
-            poseValues = rbfNode.getPoseValues(resetDriven=True,
-                                               absoluteWorld=self.absWorld)
+            poseValues = rbfNode.getPoseValues(resetDriven=True, absoluteWorld=self.absWorld)
             rbfNode.addPose(poseInput=poseInputs, poseValue=poseValues)
+
         self.refreshAllTables()
 
     def updateAllSetupsInfo(self, includeEmpty=False):
@@ -832,26 +814,40 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         self.allSetupsInfo = {}
         tmp_dict = rbf_node.getRbfSceneSetupsInfo(includeEmpty=includeEmpty)
         for setupName, nodes in tmp_dict.items():
-            self.allSetupsInfo[setupName] = [sortRBF(n) for n in nodes]
+            print(f"{setupName=}, {nodes=}")
+            rbfNodes = [rbf_manager_ui.sortRBF(n, rbfType="poseDriver") for n in nodes]
+            self.allSetupsInfo[setupName] = rbfNodes
+            print(f"{setupName=}, {rbfNodes[0]=}")
 
-    def setNodeToField(self, lineEdit, multi=False):
-        """take the currently selected node and set its name to the lineedit
+    def setNodeToField(self, listEdit, multi=True):
+        # type: (ClickableLineEdit, bool) -> None
+        """take the currently selected node and set its name to the listEdit
         provided
 
         Args:
-            lineEdit (QLineEdit): widget to set the name to
+            listEdit (ClickableLineEdit): widget to set the name to
             multi (bool, optional): should multiple nodes be supported
 
         Returns:
-            str: str set to the lineedit
+            str: str set to the listEdit
         """
         selected = mc.ls(sl=True)
+        if not selected:
+            return
+
         if not multi:
             selected = [selected[0]]
-        controlNameData = ", ".join(selected)
-        lineEdit.setText(controlNameData)
-        mc.select(cl=True)
-        return controlNameData
+
+        listEdit.setItems(selected)
+        # mc.select(cl=True)
+
+        return
+
+    def removeNodeFromField(self, listEdit):
+        # type: (ClickableListEdit) -> None
+        """Remove from list and update rbf network setups"""
+        # TODO: implement later
+        listEdit.removeItem()
 
     def highlightListEntries(self, listWidget, toHighlight):
         """set the items in a listWidget to be highlighted if they are in list
@@ -874,18 +870,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         if scrollToItems:
             listWidget.scrollToItem(scrollToItems[0])
 
-    def setAttributeDisplay(self, attrListWidget, driverName, displayAttrs):
-        nodeAttrsToDisplay = ["{}.{}".format(driverName, attr)
-                              for attr in displayAttrs]
-        attrListWidget.clear()
-        attrListWidget.addItems(sorted(nodeAttrsToDisplay))
-        self.highlightListEntries(attrListWidget, displayAttrs)
-
-    def updateAttributeDisplay(self,
-                               attrListWidget,
-                               driverNames,
-                               highlight=[],
-                               attrType="all"):
+    def updateAttributeDisplay(self, attrListWidget, driverNames, highlight=[], attrType="all"):
         """update the provided listwidget with the attrs collected from the
         list of nodes provided
 
@@ -941,13 +926,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         else:
             setattr(widget, attrName, [])
 
-    def syncDriverTableCells(self,
-                             attrEdit,
-                             rbfAttrPlug,
-                             poseIndex,
-                             valueIndex,
-                             attributeName,
-                             *args):
+    def syncDriverTableCells(self, attrEdit, rbfAttrPlug, poseIndex, valueIndex, attributeName, *args):
         """When you edit the driver table, it will update all the sibling
         rbf nodes in the setup.
 
@@ -986,32 +965,26 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         self.driverPoseTableWidget.setRowCount(poseInputLen)
         if poseInputLen == 0:
             return
-        verticalLabels = ["Pose {}".format(index) for index
-                          in range(poseInputLen)]
+
+        verticalLabels = ["Pose {}".format(index) for index in range(poseInputLen)]
         self.driverPoseTableWidget.setVerticalHeaderLabels(verticalLabels)
+
         tmpWidgets = []
         mayaUiItems = []
         for rowIndex, poseInput in enumerate(poses["poseInput"]):
             for columnIndex, pValue in enumerate(poseInput):
                 # TODO, this is where we get the attrControlGroup
-                rbfAttrPlug = "{}.poses[{}].poseInput[{}]".format(rbfNode,
-                                                                  rowIndex,
-                                                                  columnIndex)
+                rbfAttrPlug = "{}.poses[{}].poseInput[{}]".format(rbfNode, rowIndex, columnIndex)
 
-                attrEdit, mAttrFeild = getControlAttrWidget(rbfAttrPlug,
-                                                            label="")
-                func = partial(self.syncDriverTableCells,
-                               attrEdit,
-                               rbfAttrPlug,
-                               rowIndex,
-                               columnIndex,
-                               headerNames[columnIndex])
-                self.driverPoseTableWidget.setCellWidget(rowIndex,
-                                                         columnIndex,
-                                                         attrEdit)
+                attrEdit, mAttrFeild = getControlAttrWidget(rbfAttrPlug, label="")
+                func = partial(
+                    self.syncDriverTableCells, attrEdit, rbfAttrPlug, rowIndex, columnIndex, headerNames[columnIndex]
+                )
+                self.driverPoseTableWidget.setCellWidget(rowIndex, columnIndex, attrEdit)
                 attrEdit.returnPressed.connect(func)
                 tmpWidgets.append(attrEdit)
                 mayaUiItems.append(mAttrFeild)
+
         setattr(self.driverPoseTableWidget, "associated", tmpWidgets)
         setattr(self.driverPoseTableWidget, "associatedMaya", mayaUiItems)
 
@@ -1021,11 +994,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         Args:
             lock (bool, optional): should it be locked
         """
-        self.setDriverButton.blockSignals(lock)
-        if lock:
-            self.driver_attributes_widget.setEnabled(False)
-        else:
-            self.driver_attributes_widget.setEnabled(True)
+        self.controlLineEdit.addButton.blockSignals(lock)
 
     def populateDriverInfo(self, rbfNode, weightInfo):
         """populate the driver widget, driver, control, driving attrs
@@ -1035,15 +1004,13 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             weightInfo (dict): to pull information from, since we have it
         """
         driverNode = weightInfo["driverNode"]
-        if driverNode:
-            driverNode = driverNode[0]
         self.driverLineEdit.setText(driverNode)
-        driverControl = weightInfo["driverControl"]
+
         # populate control here
-        self.controlLineEdit.setText(driverControl)
-        self.setAttributeDisplay(self.driver_attributes_widget,
-                                 driverNode,
-                                 weightInfo["driverAttrs"])
+        drivenNode = weightInfo["drivenNode"]
+        self.controlLineEdit.setText(drivenNode)
+
+        print(f"populateDriverInfo: {weightInfo=}, {rbfNode=}")
         self.setDriverTable(rbfNode, weightInfo)
 
     def _associateRBFnodeAndWidget(self, tabDrivenWidget, rbfNode):
@@ -1055,42 +1022,6 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             rbfNode (RBFNode): instance to be associated
         """
         setattr(tabDrivenWidget, "rbfNode", rbfNode)
-
-    def createAndTagDrivenWidget(self, weightInfo, lockWidgets=True):
-        """create and associate a widget, populated with the information
-        provided by the weightInfo
-
-        Args:
-            weightInfo (dict): information to populate the widgets with
-            lockWidgets (bool, optional): should they be locked from editing
-
-        Returns:
-            QWidget: parent widget that houses all the information to display
-        """
-        drivenWidgetComponents = self.createDrivenAttributeWidget()
-        drivenWidget = drivenWidgetComponents.pop(-1)
-        widgetAttrs = ("drivenLineEdit",
-                       "drivenSelectButton",
-                       "attributeListWidget",
-                       "tableWidget")
-        for component, attr in zip(drivenWidgetComponents, widgetAttrs):
-            setattr(drivenWidget, attr, component)
-            if attr == "attributeListWidget" and lockWidgets:
-                component.setEnabled(False)
-        # TODO add signal connections here
-        table = [wdgt for wdgt in drivenWidgetComponents
-                 if type(wdgt) == QtWidgets.QTableWidget][0]
-        header = table.verticalHeader()
-        # TODO There was an inconsistency here with signals, potentially
-        # resolved
-        header.sectionClicked.connect(self.setConsistentHeaderSelection)
-        header.sectionClicked.connect(self.recallDriverPose)
-        selDelFunc = self.setEditDeletePoseEnabled
-        table.itemSelectionChanged.connect(selDelFunc)
-        clickWidget = [wdgt for wdgt in drivenWidgetComponents
-                       if type(wdgt) == ClickableLineEdit][0]
-        clickWidget.clicked.connect(selectNode)
-        return drivenWidget
 
     def setDrivenTable(self, drivenWidget, rbfNode, weightInfo):
         """set the widgets with information from the weightInfo for dispaly
@@ -1111,68 +1042,9 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         drivenWidget.tableWidget.setVerticalHeaderLabels(verticalLabels)
         for rowIndex, poseInput in enumerate(poses["poseValue"]):
             for columnIndex, pValue in enumerate(poseInput):
-                rbfAttrPlug = "{}.poses[{}].poseValue[{}]".format(rbfNode,
-                                                                  rowIndex,
-                                                                  columnIndex)
-                attrEdit, mAttrFeild = getControlAttrWidget(rbfAttrPlug,
-                                                            label="")
-                drivenWidget.tableWidget.setCellWidget(rowIndex,
-                                                       columnIndex,
-                                                       attrEdit)
-
-    def populateDrivenWidgetInfo(self, drivenWidget, weightInfo, rbfNode):
-        """set the information from the weightInfo to the widgets child of
-        drivenWidget
-
-        Args:
-            drivenWidget (QWidget): parent widget
-            weightInfo (dict): of information to display
-            rbfNode (RBFNode): instance of the RBFNode
-
-        Returns:
-            n/a: n/a
-        """
-        drivenWidget.drivenLineEdit.clear()
-        driverNode = weightInfo["drivenNode"]
-        if driverNode:
-            driverNode = driverNode[0]
-        else:
-            return
-        drivenWidget.drivenLineEdit.setText(str(driverNode))
-
-        self.setAttributeDisplay(drivenWidget.attributeListWidget,
-                                 weightInfo["drivenNode"][0],
-                                 weightInfo["drivenAttrs"])
-        self.setDrivenTable(drivenWidget, rbfNode, weightInfo)
-
-    def addNewTab(self, rbfNode):
-        """Create a new tab in the setup
-
-        Args:
-            rbfNode (RBFNode): to pull information from
-
-        Returns:
-            QWidget: created widget
-        """
-        tabDrivenWidget = self.createAndTagDrivenWidget({})
-        self._associateRBFnodeAndWidget(tabDrivenWidget, rbfNode)
-        self.rbfTabWidget.addTab(tabDrivenWidget, str(rbfNode))
-        return tabDrivenWidget
-
-    def recreateDrivenTabs(self, rbfNodes):
-        """remove tabs and create ones for each node in rbfNodes provided
-
-        Args:
-            rbfNodes (list): [of RBFNodes]
-        """
-        rbfNodes = sorted(rbfNodes, key=lambda x: x.name)
-        self.rbfTabWidget.clear()
-        for rbfNode in rbfNodes:
-            weightInfo = rbfNode.getNodeInfo()
-            drivenWidget = self.createAndTagDrivenWidget(weightInfo)
-            self._associateRBFnodeAndWidget(drivenWidget, rbfNode)
-            self.populateDrivenWidgetInfo(drivenWidget, weightInfo, rbfNode)
-            self.rbfTabWidget.addTab(drivenWidget, rbfNode.name)
+                rbfAttrPlug = "{}.poses[{}].poseValue[{}]".format(rbfNode, rowIndex, columnIndex)
+                attrEdit, mAttrFeild = getControlAttrWidget(rbfAttrPlug, label="")
+                drivenWidget.tableWidget.setCellWidget(rowIndex, columnIndex, attrEdit)
 
     def displayRBFSetupInfo(self, index):
         """Display the rbfnodes within the desired setups
@@ -1182,19 +1054,22 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
 
         """
         rbfSelection = str(self.rbf_cbox.currentText())
-        self.refresh(rbfSelection=False,
-                     driverSelection=True,
-                     drivenSelection=True,
-                     currentRBFSetupNodes=False)
+        self.refresh(rbfSelection=False, driverSelection=True, drivenSelection=True, currentRBFSetupNodes=False)
         if rbfSelection.startswith("New "):
             self.currentRBFSetupNodes = []
             self.lockDriverWidgets(lock=False)
             return
+
+        print(f"{rbfSelection=}")
         rbfNodes = self.allSetupsInfo.get(rbfSelection, [])
         if not rbfNodes:
             return
+
+        print(f"{rbfNodes[0]=}, {type(rbfNodes[0])}")
         self.currentRBFSetupNodes = rbfNodes
         weightInfo = rbfNodes[0].getNodeInfo()
+        for k, v in weightInfo.items():
+            print(k, v)
         self.populateDriverInfo(rbfNodes[0], weightInfo)
         self.lockDriverWidgets(lock=True)
         # wrapping the following in try due to what I think is a Qt Bug.
@@ -1203,20 +1078,8 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         #     header.sectionClicked.connect(self.setConsistentHeaderSelection)
         # AttributeError: 'PySide2.QtWidgets.QListWidgetItem' object has
         # no attribute 'sectionClicked'
-        try:
-            self.recreateDrivenTabs(self.allSetupsInfo[rbfSelection])
-        except AttributeError:
-            print("Forcing refresh on UI due to error.")
-            self.refresh(rbfSelection=True,
-                         driverSelection=True,
-                         drivenSelection=True,
-                         currentRBFSetupNodes=True)
 
-    def attrListMenu(self,
-                     attributeListWidget,
-                     driverLineEdit,
-                     QPos,
-                     nodeToQuery=None):
+    def attrListMenu(self, attributeListWidget, driverLineEdit, QPos, nodeToQuery=None):
         """right click menu for queie qlistwidget
 
         Args:
@@ -1235,24 +1098,21 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         parentPosition = attributeListWidget.mapToGlobal(QtCore.QPoint(0, 0))
         menu_item_01 = self.attrMenu.addAction("Display Keyable")
         menu_item_01.setToolTip("Show Keyable Attributes")
-        menu_item_01.triggered.connect(partial(self.updateAttributeDisplay,
-                                               attributeListWidget,
-                                               nodeToQuery,
-                                               attrType="keyable"))
+        menu_item_01.triggered.connect(
+            partial(self.updateAttributeDisplay, attributeListWidget, nodeToQuery, attrType="keyable")
+        )
         menu2Label = "Display ChannelBox (Non Keyable)"
         menu_item_02 = self.attrMenu.addAction(menu2Label)
         menu2tip = "Show attributes in ChannelBox that are not keyable."
         menu_item_02.setToolTip(menu2tip)
-        menu_item_02.triggered.connect(partial(self.updateAttributeDisplay,
-                                               attributeListWidget,
-                                               nodeToQuery,
-                                               attrType="cb"))
+        menu_item_02.triggered.connect(
+            partial(self.updateAttributeDisplay, attributeListWidget, nodeToQuery, attrType="cb")
+        )
         menu_item_03 = self.attrMenu.addAction("Display All")
         menu_item_03.setToolTip("GIVE ME ALL!")
-        menu_item_03.triggered.connect(partial(self.updateAttributeDisplay,
-                                               attributeListWidget,
-                                               nodeToQuery,
-                                               attrType="all"))
+        menu_item_03.triggered.connect(
+            partial(self.updateAttributeDisplay, attributeListWidget, nodeToQuery, attrType="all")
+        )
         self.attrMenu.move(parentPosition + QPos)
         self.attrMenu.show()
 
@@ -1264,8 +1124,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         """
         self.rbf_cbox.blockSignals(True)
         self.rbf_cbox.clear()
-        addNewOfType = ["New {} setup".format(rbf)
-                        for rbf in rbf_node.SUPPORTED_RBF_NODES]
+        addNewOfType = ["New {} setup".format(rbf) for rbf in rbf_node.SUPPORTED_RBF_NODES]
         self.updateAllSetupsInfo()
         addNewOfType.extend(sorted(self.allSetupsInfo.keys()))
         self.rbf_cbox.addItems(addNewOfType)
@@ -1276,23 +1135,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             self.lockDriverWidgets(lock=False)
         self.rbf_cbox.blockSignals(False)
 
-    def clearDrivenTabs(self):
-        """force deletion on tab widgets
-        """
-        toRemove = []
-        tabIndicies = self.rbfTabWidget.count()
-        for index in range(tabIndicies):
-            tabWidget = self.rbfTabWidget.widget(index)
-            toRemove.append(tabWidget)
-        self.rbfTabWidget.clear()
-        [t.deleteLater() for t in toRemove]
-
-    def refresh(self,
-                rbfSelection=True,
-                driverSelection=True,
-                drivenSelection=True,
-                currentRBFSetupNodes=True,
-                *args):
+    def refresh(self, rbfSelection=True, driverSelection=True, drivenSelection=True, currentRBFSetupNodes=True, *args):
         """Refreshes the UI
 
         Args:
@@ -1303,15 +1146,14 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         """
         if rbfSelection:
             self.refreshRbfSetupList()
+
         if driverSelection:
             self.controlLineEdit.clear()
             self.driverLineEdit.clear()
-            self.driver_attributes_widget.clear()
             self.__deleteAssociatedWidgetsMaya(self.driverPoseTableWidget)
             self.__deleteAssociatedWidgets(self.driverPoseTableWidget)
             self.driverPoseTableWidget.clear()
-        if drivenSelection:
-            self.clearDrivenTabs()
+
         if currentRBFSetupNodes:
             self.currentRBFSetupNodes = []
 
@@ -1340,12 +1182,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         self.driverPoseTableWidget.blockSignals(True)
         self.driverPoseTableWidget.selectRow(headerIndex)
         self.driverPoseTableWidget.blockSignals(False)
-        for index in range(self.rbfTabWidget.count()):
-            drivenWidget = self.rbfTabWidget.widget(index)
-            drivenTableWidget = getattr(drivenWidget, "tableWidget")
-            drivenTableWidget.blockSignals(True)
-            drivenTableWidget.selectRow(headerIndex)
-            drivenTableWidget.blockSignals(False)
+
         self.setEditDeletePoseEnabled(enable=True)
 
     def setEditDeletePoseEnabled(self, enable=False):
@@ -1357,7 +1194,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         self.editPoseButton.setEnabled(enable)
         self.deletePoseButton.setEnabled(enable)
 
-    def setDriverControlOnSetup(self, controlName):
+    def setDriverControlOnSetup(self):
         """make sure to set the driverControlAttr when the user supplies one
 
         Args:
@@ -1366,27 +1203,31 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         for rbfNode in self.currentRBFSetupNodes:
             rbfNode.setDriverControlAttr(controlName)
 
-    def setSetupDriverControl(self, lineEditWidget):
+    def setSetupDriverControl(self, listEditWidget):
         """should the user wish to set a different driverControl pose setup
         creation, prompt them prior to proceeding
 
         Args:
-            lineEditWidget (QLineEdit): to query for the name
+            listEditWidget (QLineEdit): to query for the name
 
         Returns:
             n/a: nada
         """
+
         if not self.currentRBFSetupNodes:
-            self.setNodeToField(lineEditWidget)
+            self.setNodeToField(listEditWidget)
+
         elif self.currentRBFSetupNodes:
+
             textA = "Do you want to change the Control for setup?"
             textB = "This Control that will be used for recalling poses."
             decision = promptAcceptance(self, textA, textB)
-            if decision in [QtWidgets.QMessageBox.Discard,
-                            QtWidgets.QMessageBox.Cancel]:
+
+            if any((decision == QtWidgets.QMessageBox.Discard, decision == QtWidgets.QMessageBox.Cancel)):
                 return
-            controlName = self.setNodeToField(lineEditWidget)
-            self.setDriverControlOnSetup(controlName)
+
+            self.setNodeToField(listEditWidget)
+            # self.setDriverControlOnSetup()
 
     def getRBFNodesInfo(self, rbfNodes):
         """create a dictionary of all the RBFInfo(referred to as
@@ -1401,6 +1242,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         weightNodeInfo_dict = {}
         for rbf in rbfNodes:
             weightNodeInfo_dict[rbf.name] = rbf.getNodeInfo()
+
         return weightNodeInfo_dict
 
     def importNodes(self):
@@ -1409,7 +1251,9 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         Returns:
             n/a: nada
         """
-        filePath = rbf_io.fileDialog(mode=1)
+        sceneFilePath = mc.file(sn=True, q=True)
+        startDir = os.path.dirname(sceneFilePath)
+        filePath = rbf_io.fileDialog(startDir, mode=1)
         if filePath is None:
             return
         rbf_io.importRBFs(filePath)
@@ -1429,15 +1273,17 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         # TODO WHEN NEW RBF NODE TYPES ARE ADDED, THIS WILL NEED TO BE RETOOLED
         nodesToExport = []
         if allSetups:
-            [nodesToExport.extend(v) for k, v,
-             in self.allSetupsInfo.items()]
+            [nodesToExport.extend(v) for k, v, in self.allSetupsInfo.items()]
         else:
             nodesToExport = self.currentRBFSetupNodes
 
         nodesToExport = [n.name for n in nodesToExport]
-        filePath = rbf_io.fileDialog(mode=0)
+        sceneFilePath = mc.file(sn=True, q=True)
+        startDir = os.path.dirname(sceneFilePath)
+        filePath = rbf_io.fileDialog(startDir, mode=0)
         if filePath is None:
             return
+
         rbf_io.exportRBFs(nodesToExport, filePath)
 
     def gatherMirroredInfo(self, rbfNodes):
@@ -1457,21 +1303,18 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             # connections -----------------------------------------------------
             mrConnections = []
             for pairs in weightInfo["connections"]:
-                mrConnections.append([mString.convertRLName(pairs[0]),
-                                      mString.convertRLName(pairs[1])])
+                mrConnections.append([mString.convertRLName(pairs[0]), mString.convertRLName(pairs[1])])
             weightInfo["connections"] = mrConnections
             # drivenControlName -----------------------------------------------
             mrDrvnCtl = mString.convertRLName(weightInfo["drivenControlName"])
             weightInfo["drivenControlName"] = mrDrvnCtl
             # drivenNode ------------------------------------------------------
-            weightInfo["drivenNode"] = [mString.convertRLName(n) for n
-                                        in weightInfo["drivenNode"]]
+            weightInfo["drivenNode"] = [mString.convertRLName(n) for n in weightInfo["drivenNode"]]
             # driverControl ---------------------------------------------------
             mrDrvrCtl = mString.convertRLName(weightInfo["driverControl"])
             weightInfo["driverControl"] = mrDrvrCtl
             # driverNode ------------------------------------------------------
-            weightInfo["driverNode"] = [mString.convertRLName(n) for n
-                                        in weightInfo["driverNode"]]
+            weightInfo["driverNode"] = [mString.convertRLName(n) for n in weightInfo["driverNode"]]
             # setupName -------------------------------------------------------
             mrSetupName = mString.convertRLName(weightInfo["setupName"])
             if mrSetupName == weightInfo["setupName"]:
@@ -1503,13 +1346,12 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         setupTargetInfo_dict = {}
         for rbfNode in self.currentRBFSetupNodes:
             mrRbfNode = mString.convertRLName(rbfNode.name)
-            mrRbfNode = sortRBF(mrRbfNode)
+            mrRbfNode = rbf_manager_ui.sortRBF(mrRbfNode, rbfType="poseDriver")
             drivenNode = rbfNode.getDrivenNode()[0]
             drivenControlNode = rbfNode.getConnectedRBFToggleNode()
             mrDrivenControlNode = mString.convertRLName(drivenControlNode)
             mrDrivenControlNode = pm.PyNode(mrDrivenControlNode)
-            setupTargetInfo_dict[pm.PyNode(drivenNode)] = [mrDrivenControlNode,
-                                                           mrRbfNode]
+            setupTargetInfo_dict[pm.PyNode(drivenNode)] = [mrDrivenControlNode, mrRbfNode]
         return setupTargetInfo_dict
 
     def mirrorSetup(self):
@@ -1545,17 +1387,14 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             anim_utils.mirrorPose(flip=False, nodes=[driverControl])
             mrData = []
             for srcNode, dstValues in setupTargetInfo_dict.items():
-                mrData.extend(anim_utils.calculateMirrorData(srcNode,
-                                                             dstValues[0]))
+                mrData.extend(anim_utils.calculateMirrorData(srcNode, dstValues[0]))
             for entry in mrData:
                 anim_utils.applyMirror(nameSpace, entry)
 
             poseInputs = rbf_node.getMultipleAttrs(mrDriverNode, mrDriverAttrs)
             for mrRbfNode in mrRbfNodes:
                 poseValues = mrRbfNode.getPoseValues(resetDriven=True)
-                mrRbfNode.addPose(poseInput=poseInputs,
-                                  poseValue=poseValues,
-                                  posesIndex=index)
+                mrRbfNode.addPose(poseInput=poseInputs, poseValue=poseValues, posesIndex=index)
                 mrRbfNode.forceEvaluation()
         [v.setToggleRBFAttr(1) for v in mrRbfNodes]
         setupName, rbfType = self.getSelectedSetup()
@@ -1574,33 +1413,8 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         else:
             self.menuBar().hide()
 
-    def tabConextMenu(self, qPoint):
-        """create a pop up menu over the tabs when right clicked
-
-        Args:
-            qPoint (int): the mouse position when menu requested
-
-        Returns:
-            n/a: diddly
-        """
-        tabIndex = self.rbfTabWidget.tabBar().tabAt(qPoint)
-        if tabIndex == -1:
-            return
-        selWidget = self.rbfTabWidget.widget(tabIndex)
-        rbfNode = getattr(selWidget, "rbfNode")
-        tabMenu = QtWidgets.QMenu(self)
-        parentPosition = self.rbfTabWidget.mapToGlobal(QtCore.QPoint(0, 0))
-        menu_item_01 = tabMenu.addAction("Select {}".format(rbfNode))
-        menu_item_01.triggered.connect(partial(mc.select, rbfNode))
-        partialObj_selWdgt = partial(self.rbfTabWidget.setCurrentWidget,
-                                     selWidget)
-        menu_item_01.triggered.connect(partialObj_selWdgt)
-        tabMenu.move(parentPosition + qPoint)
-        tabMenu.show()
-
     def reevalluateAllNodes(self):
-        """for evaluation on all nodes in any setup. In case of manual editing
-        """
+        """for evaluation on all nodes in any setup. In case of manual editing"""
         for name, rbfNodes in self.allSetupsInfo.items():
             [rbfNode.forceEvaluation() for rbfNode in rbfNodes]
         print("All Nodes have been Re-evaluated")
@@ -1646,21 +1460,10 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         self.editPoseButton.clicked.connect(self.editPose)
         self.deletePoseButton.clicked.connect(self.deletePose)
         partialObj = partial(self.setSetupDriverControl, self.controlLineEdit)
-        self.setControlButton.clicked.connect(partialObj)
-        self.setDriverButton.clicked.connect(partial(self.setNodeToField,
-                                                     self.driverLineEdit))
-        partialObj = partial(self.updateAttributeDisplay,
-                             self.driver_attributes_widget)
-        self.driverLineEdit.textChanged.connect(partialObj)
-        partialObj = partial(self.attrListMenu,
-                             self.driver_attributes_widget,
-                             self.driverLineEdit)
-        customMenu = self.driver_attributes_widget.customContextMenuRequested
-        customMenu.connect(partialObj)
-        tabBar = self.rbfTabWidget.tabBar()
-        tabBar.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        tabBar.customContextMenuRequested.connect(self.tabConextMenu)
-        tabBar.tabCloseRequested.connect(self.removeRBFFromSetup)
+        self.controlLineEdit.addButton.clicked.connect(partialObj)
+        self.driverLineEdit.addButton.clicked.connect(partial(self.setNodeToField, self.driverLineEdit))
+        self.driverLineEdit.removeButton.clicked.connect(partial(self.removeNodeFromField, self.driverLineEdit))
+        self.controlLineEdit.removeButton.clicked.connect(partial(self.removeNodeFromField, self.controlLineEdit))
 
     # broken down widgets -----------------------------------------------------
     def createSetupSelectorWidget(self):
@@ -1681,21 +1484,13 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         setRBFLayout.addWidget(rbf_refreshButton)
         return setRBFLayout, rbf_cbox, rbf_refreshButton
 
-    def selectNodeWidget(self, label, buttonLabel="Select"):
-        """create a lout with label, lineEdit, QPushbutton for user input
-        """
+    def selectNodeWidget(self, label):
+        """create a lout with label, lineEdit, QPushbutton for user input"""
         nodeLayout = QtWidgets.QHBoxLayout()
-        nodeLabel = QtWidgets.QLabel(label)
-        nodeLabel.setFixedWidth(40)
-        nodeLineEdit = ClickableLineEdit()
-        nodeLineEdit.setReadOnly(True)
-        nodeSelectButton = QtWidgets.QPushButton(buttonLabel)
-        nodeLineEdit.setFixedHeight(self.genericWidgetHight)
-        nodeSelectButton.setFixedHeight(self.genericWidgetHight)
-        nodeLayout.addWidget(nodeLabel)
-        nodeLayout.addWidget(nodeLineEdit, 1)
-        nodeLayout.addWidget(nodeSelectButton)
-        return nodeLayout, nodeLineEdit, nodeSelectButton
+        listEdit = ClickableListEdit(label=label)
+        nodeLayout.addWidget(listEdit)
+
+        return nodeLayout, listEdit
 
     def labelListWidget(self, label, horizontal=True):
         """create the listAttribute that users can select their driver/driven
@@ -1731,42 +1526,27 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         return addRemoveLayout, addAttributesButton, removeAttributesButton
 
     def createDriverAttributeWidget(self):
+        # type () -> Tuple[ClickableLineEdit, ClickableLineEdit, QtWidget.QVBoxLayout]
         """widget where the user inputs information for the setups
 
         Returns:
-            list: [of widgets]
+            tuple: [of widgets]
         """
         driverMainLayout = QtWidgets.QVBoxLayout()
+
         #  --------------------------------------------------------------------
-        (driverLayout,
-         driverLineEdit,
-         driverSelectButton) = self.selectNodeWidget("Driver",
-                                                     buttonLabel="Set")
+        (driverLayout, driverLineEdit) = self.selectNodeWidget("Source Bones")
         driverLineEdit.setToolTip("The node driving the setup. (Click me!)")
+
         #  --------------------------------------------------------------------
-        (controlLayout,
-         controlLineEdit,
-         setControlButton) = self.selectNodeWidget("Control",
-                                                   buttonLabel="Set")
+        (controlLayout, controlLineEdit) = self.selectNodeWidget("Drive Bones")
         controlLineEdit.setToolTip("The node driving the setup. (Click me!)")
-        #  --------------------------------------------------------------------
-        (attributeLayout,
-         attributeListWidget) = self.labelListWidget(label="Select Attributes",
-                                                     horizontal=False)
-        attributeListWidget.setToolTip("List of attributes driving setup.")
-        selType = QtWidgets.QAbstractItemView.ExtendedSelection
-        attributeListWidget.setSelectionMode(selType)
-        attributeListWidget.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+
         #  --------------------------------------------------------------------
         driverMainLayout.addLayout(driverLayout, 0)
         driverMainLayout.addLayout(controlLayout, 0)
-        driverMainLayout.addLayout(attributeLayout, 0)
-        return [controlLineEdit,
-                setControlButton,
-                driverLineEdit,
-                driverSelectButton,
-                attributeListWidget,
-                driverMainLayout]
+
+        return (controlLineEdit, driverLineEdit, driverMainLayout)
 
     def createDrivenAttributeWidget(self):
         """the widget that displays the driven information
@@ -1782,17 +1562,12 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         drivenMainLayout.addLayout(driverSetLayout)
         drivenWidget.setLayout(drivenMainLayout)
         #  --------------------------------------------------------------------
-        (driverLayout,
-         driverLineEdit,
-         driverSelectButton) = self.selectNodeWidget("Driven",
-                                                     buttonLabel="Select")
+        (driverLayout, driverLineEdit, driverSelectButton) = self.selectNodeWidget("Driven")
         drivenTip = "The node being driven by setup. (Click me!)"
         driverLineEdit.setToolTip(drivenTip)
         driverSelectButton.hide()
         #  --------------------------------------------------------------------
-        (attributeLayout,
-         attributeListWidget) = self.labelListWidget(label="Attributes",
-                                                     horizontal=False)
+        (attributeLayout, attributeListWidget) = self.labelListWidget(label="Attributes", horizontal=False)
         attributeListWidget.setToolTip("Attributes being driven by setup.")
         attributeLayout.setSpacing(1)
         selType = QtWidgets.QAbstractItemView.ExtendedSelection
@@ -1804,11 +1579,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         driverSetLayout.addLayout(driverLayout, 0)
         driverSetLayout.addLayout(attributeLayout, 0)
         drivenMainLayout.addWidget(tableWidget, 1)
-        return [driverLineEdit,
-                driverSelectButton,
-                attributeListWidget,
-                tableWidget,
-                drivenWidget]
+        return [driverLineEdit, driverSelectButton, attributeListWidget, tableWidget, drivenWidget]
 
     def createTableWidget(self):
         """create table widget used to display poses, set tooltips and colum
@@ -1861,10 +1632,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         optionsLayout.addWidget(addPoseButton)
         optionsLayout.addWidget(EditPoseButton)
         optionsLayout.addWidget(deletePoseButton)
-        return (optionsLayout,
-                addPoseButton,
-                EditPoseButton,
-                deletePoseButton)
+        return (optionsLayout, addPoseButton, EditPoseButton, deletePoseButton)
 
     def createMenuBar(self, hideMenuBar=False):
         """Create the UI menubar, with option to hide based on mouse input
@@ -1881,8 +1649,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         menu1 = file.addAction("Re-evaluate Nodes", self.reevalluateAllNodes)
         menu1.setToolTip("Force all RBF nodes to re-revaluate.")
         file.addAction("Export All", self.exportNodes)
-        file.addAction("Export current setup", partial(self.exportNodes,
-                                                       allSetups=False))
+        file.addAction("Export current setup", partial(self.exportNodes, allSetups=False))
         file.addAction("Import RBFs", partial(self.importNodes))
         file.addSeparator()
         file.addAction("Delete Current Setup", self.__deleteSetup)
@@ -1921,6 +1688,7 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
             mainMenuBar.hide()
             self.setMouseTracking(True)
             self.mousePosition.connect(self.hideMenuBar)
+
         return mainMenuBar
 
     # main assebly ------------------------------------------------------------
@@ -1934,23 +1702,16 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         centralWidget = QtWidgets.QWidget()
         centralWidgetLayout = QtWidgets.QVBoxLayout()
         centralWidget.setLayout(centralWidgetLayout)
-        (rbfLayout,
-         self.rbf_cbox,
-         self.rbf_refreshButton) = self.createSetupSelectorWidget()
+        (rbfLayout, self.rbf_cbox, self.rbf_refreshButton) = self.createSetupSelectorWidget()
         self.rbf_cbox.setToolTip("List of available setups in the scene.")
         self.rbf_refreshButton.setToolTip("Refresh the UI")
         centralWidgetLayout.addLayout(rbfLayout)
         centralWidgetLayout.addWidget(HLine())
         #  --------------------------------------------------------------------
         driverDrivenLayout = QtWidgets.QHBoxLayout()
-        (self.controlLineEdit,
-         self.setControlButton,
-         self.driverLineEdit,
-         self.setDriverButton,
-         self.driver_attributes_widget,
-         driverLayout) = self.createDriverAttributeWidget()
+        (self.controlLineEdit, self.driverLineEdit, driverLayout) = self.createDriverAttributeWidget()
 
-        self.addRbfButton = QtWidgets.QPushButton("New RBF")
+        self.addRbfButton = QtWidgets.QPushButton("New PoseDriver")
         self.addRbfButton.setToolTip("Select node to be driven by setup.")
         self.addRbfButton.setFixedHeight(self.genericWidgetHight)
         self.addRbfButton.setStyleSheet("background-color: rgb(23, 158, 131)")
@@ -1961,13 +1722,12 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         driverDrivenLayout.addWidget(self.driverPoseTableWidget, 1)
         centralWidgetLayout.addLayout(driverDrivenLayout, 1)
         #  --------------------------------------------------------------------
-        self.rbfTabWidget = self.createTabWidget()
-        centralWidgetLayout.addWidget(self.rbfTabWidget, 1)
-        #  --------------------------------------------------------------------
-        (optionsLayout,
-         self.addPoseButton,
-         self.editPoseButton,
-         self.deletePoseButton) = self.createOptionsButtonsWidget()
+        (
+            optionsLayout,
+            self.addPoseButton,
+            self.editPoseButton,
+            self.deletePoseButton,
+        ) = self.createOptionsButtonsWidget()
         self.editPoseButton.setEnabled(False)
         self.deletePoseButton.setEnabled(False)
         centralWidgetLayout.addWidget(HLine())
@@ -1998,4 +1758,10 @@ class RBFManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow):
         self.__deleteAssociatedWidgets(self.driverPoseTableWidget)
         if self.callBackID is not None:
             self.removeSceneCallback()
-        super(RBFManagerUI, self).closeEvent(evnt)
+        super(PoseDriverManagerUI, self).closeEvent(evnt)
+
+
+if __name__ == "__main__":
+    import mgear.rigbits.posedriver_ui as ui
+
+    ui.show()
