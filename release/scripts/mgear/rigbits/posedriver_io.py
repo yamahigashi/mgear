@@ -588,8 +588,10 @@ def getRestTransforms(node):
         elif i % 7 == 6:
             rw = val
 
-            t = om.MVector(tx, ty, tz)
-            r = om.MQuaternion(rx, ry, rz, rw)
+            t = (tx, ty, tz)
+            r = (rx, ry, rz, rw)
+            # t = om.MVector(tx, ty, tz)
+            # r = om.MQuaternion(rx, ry, rz, rw)
 
             res.append((t, r))
 
@@ -853,6 +855,7 @@ def getNodeInfo(node):
     Returns:
         dict: collected node info
     """
+
     node = pm.PyNode(node)
     weightNodeInfo_dict = {}
     for attr in WNODE_SHAPE_ATTRS:
@@ -1158,38 +1161,28 @@ def createRBFFromInfo(weightNodeInfo_dict):
         driverControlPoseInfo = weightInfo.pop(rbf_node.DRIVER_POSES_INFO_ATTR,
                                                {})
 
-        if not mc.objExists(drivenControlName):
-            skipped_nodes.append(drivenControlName)
-            continue
+        # if not mc.objExists(drivenControlName):
+        #     skipped_nodes.append(drivenControlName)
+        #     continue
+        node = RBFNode(weightNodeName)
 
-        transformNode, node = createRBF(weightNodeName,
-                                        transformName=transformName)
-        rbf_node.setSetupName(node.name(), setupName)
-        # create the driven group for the control
-        if (drivenNodeName and
-            drivenNodeName[0].endswith(DRIVEN_SUFFIX) and
-                drivenControlName):
-            rbf_node.addDrivenGroup(drivenControlName)
-        elif (drivenNodeName and
-              drivenNodeName[0].endswith(DRIVEN_SUFFIX) and
-              mc.objExists(drivenNodeName[0].replace(DRIVEN_SUFFIX, ""))):
-            drivenControlName = drivenNodeName[0].replace(DRIVEN_SUFFIX, "")
-            rbf_node.addDrivenGroup(drivenControlName)
+        node.create(driverNodeName, drivenNodeName)
+        node.setSetupName(setupName)
+        node.setDriverControlAttr(drivenNodeName)
+        node.setDriverNode(driverNodeName, driverNodeAttributes)
+        pynode = pm.PyNode(node.name)
 
-        rbf_node.createRBFToggleAttr(drivenControlName)
-        rbf_node.setDriverControlAttr(node.name(), driverControl)
-        setTransformNode(transformNode, transformNodeInfo)
-        setWeightNodeAttributes(node, weightInfo)
-        recreateAttributes(node, attributesToRecreate)
-        setPosesFromInfo(node, posesInfo)
-        setDriverListFromInfo(node, driverListInfo)
-        createVectorDriver(driverInfo)
-        rbf_node.setDriverControlPoseAttr(node.name(), driverControlPoseInfo)
-        recreateConnections(connectionsInfo)
-        createdNodes.append(node.name())
+        setWeightNodeAttributes(pynode, weightInfo)
+        recreateAttributes(pynode, attributesToRecreate)
+        setPosesFromInfo(pynode, posesInfo)
+        setDriverListFromInfo(pynode, driverListInfo)
+        rbf_node.setDriverControlPoseAttr(node.name, driverControlPoseInfo)
+        # recreateConnections(connectionsInfo)
+        createdNodes.append(node)
 
     if skipped_nodes:
         mc.warning("RBF Nodes were skipped due to missing controls! \n {}".format(skipped_nodes))
+
     return createdNodes
 
 
@@ -1229,6 +1222,20 @@ def importNodes(filePath):
     """
     weightNodeInfo_dict = rbf_io._importData(filePath)
     createRBFFromInfo(weightNodeInfo_dict)
+
+
+def exportRBFs(nodes, filePath):
+    """exports the desired rbf nodes to the filepath provided
+
+    Args:
+        nodes (list): of rbfnodes
+        filePath (str): filepath to json
+    """
+    rbfNode_Info = {}
+    for n in nodes:
+        rbfNode_Info[n] = getNodeInfo(n)
+    rbf_io.__exportData(rbfNode_Info, filePath)
+    print("RBF Data exported: {}".format(filePath))
 
 
 class RBFNode(rbf_node.RBFNode):
@@ -1274,8 +1281,9 @@ class RBFNode(rbf_node.RBFNode):
         transformNode, node = createPoseDriver(name, srcBones, driveBones)
         self.transformNode = transformNode.name()
         self.name = node.name()
-        self.src = srcBones
-        self.dst = driveBones
+
+        self.src = getSrcNode(node)
+        self.dst = getDrivenNode(node)
 
     def getPoseInfo(self):
         return getPoseInfo(self.name)
@@ -1405,9 +1413,13 @@ class RBFNode(rbf_node.RBFNode):
         drivenNodes = self.getDrivenNode()
         restXforms = getRestTransforms(self.name)
         for (restT, restR), node in zip(restXforms, drivenNodes):
+
+            rt = om.MVector(restT)
+            rr = om.MQuaternion(restR)
+
             t, r = getLocalXformWithOffsetparentmatrix(node)
-            t -= restT
-            r *= (restR.inverse())
+            t -= rt
+            r *= (rr.inverse())
 
             res.append(t[0])
             res.append(t[1])
