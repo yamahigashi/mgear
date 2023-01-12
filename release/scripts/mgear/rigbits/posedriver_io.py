@@ -29,6 +29,7 @@ __email__ = "yamahigashi@gmail.com"
 
 """
 # python
+import os
 import ast
 import copy
 import math
@@ -37,8 +38,12 @@ from .six import PY2
 
 # core
 import maya.cmds as mc
+import maya.mel as mel
 import maya.api.OpenMaya as om
 import pymel.core as pm
+
+import fbx
+import FbxCommon
 
 # rbfSetup
 if PY2:
@@ -426,6 +431,7 @@ def lengthenCompoundAttrs(node):
 
 
 def getPoseInfo(node):
+    # type: (Text) -> Dict[Text, Any]
     """Get dict of the pose info from the provided weightDriver node
 
     Args:
@@ -856,7 +862,9 @@ def getNodeInfo(node):
         dict: collected node info
     """
 
-    node = pm.PyNode(node)
+    if isinstance(node, str):
+        node = pm.PyNode(node)
+    # node = pm.PyNode(node)
     weightNodeInfo_dict = {}
     for attr in WNODE_SHAPE_ATTRS:
         weightNodeInfo_dict[attr] = node.getAttr(attr)
@@ -1237,6 +1245,83 @@ def exportRBFs(nodes, filePath):
     rbf_io.__exportData(rbfNode_Info, filePath)
     print("RBF Data exported: {}".format(filePath))
 
+    exportPoseAsFBX(nodes, filePath.replace("rbf", "fbx"))
+
+
+def exportPoseAsFBX(nodes, filePath):
+    # type: (List[pm.PyNode], str) -> None
+    """exports the pose to fbx for UE posedriver."""
+    mc.select(cl=True)
+
+    for node in nodes:
+        nodeInfo = getNodeInfo(node)
+
+        driver = nodeInfo.get("driverNode", "")
+        driven = nodeInfo.get("drivenNode", "")
+        poses = nodeInfo.get("poses", {})
+        input_ = poses.get("poseInput", [])
+        value = poses.get("poseValue", [])
+        rest = nodeInfo.get(REST_TRANSFORM_ATTR , [])
+
+        keyInfo = {}
+        for i, bone in enumerate(driver):
+            keyInfo[bone] = {"rotation": [], "translation": []}
+            for pi in input_:
+                rs = i * 3 + 0
+                re = i * 3 + 3
+                rot = pi[rs:re]
+                keyInfo[bone]["rotation"].append(rot)
+
+        for i, bone in enumerate(driven):
+            keyInfo[bone] = {"rotation": [], "translation": []}
+            for pi in value:
+                ts = i * 7 + 0
+                te = i * 7 + 3
+                rs = i * 7 + 3
+                re = i * 7 + 8
+                rot = pi[rs:re]
+                tra = pi[ts:te]
+
+                tra[0] += rest[i][0][0]
+                tra[1] += rest[i][0][1]
+                tra[2] += rest[i][0][2]
+                rot[0] += rest[i][1][0]
+                rot[1] += rest[i][1][1]
+                rot[2] += rest[i][1][2]
+                keyInfo[bone]["rotation"].append(rot)
+                keyInfo[bone]["translation"].append(tra)
+
+        mc.select(mc.ls(driver))
+        mc.select(mc.ls(driven), add=True)
+
+        exportFBX(nodeInfo.get("setupName"), filePath, keyInfo)
+
+
+def exportFBX(name, fbxPath, keyInfo):
+    safePath = fbxPath.replace(os.sep, "/")
+    mel.eval("FBXResetExport")
+    # mel.eval('FBXLoadExportPresetFile -f "{}";'.format(preset_path))
+
+    # frame range ---------------------------------------------------
+    mel.eval("FBXExportBakeComplexAnimation -v 1")
+    # if bake_animation:
+    #     mc.playbackOptions(min=frame_start)
+    #     mc.playbackOptions(max=frame_end)
+    mel.eval("FBXExportBakeComplexStart -v 0")
+    mel.eval("FBXExportBakeComplexEnd -v 0")
+    mel.eval("FBXExportSplitAnimationIntoTakes -clear;")
+    cmd = u"""FBXExportSplitAnimationIntoTakes -v "{}" {} {};""".format(name, 0, len(keyInfo))
+    mel.eval(cmd)
+    mel.eval("FBXExportDeleteOriginalTakeOnSplitAnimation - v true;")
+
+    # do export -----------------------------------------------------
+    mel.eval(u'FBXExport -s -f "{}";'.format(safePath))
+    mel.eval("FBXExportSplitAnimationIntoTakes -clear;")
+
+    # --------------------------------------------------------------
+    modify_fbx_file_to_add_key(fbxPath, keyInfo)
+
+
 
 class RBFNode(rbf_node.RBFNode):
     """when subclassed everything that need be overrided is information
@@ -1447,8 +1532,6 @@ class RBFNode(rbf_node.RBFNode):
             mc.setAttr("{}.rotateZ".format(source), r[2])
             mc.delete(tmp)
 
-            print(f"{pose=}, {pathToAttr=}, {r=}")
-
     def recallDriverPose(self, posesIndex):
         # type: (int) -> None
 
@@ -1477,7 +1560,7 @@ class RBFNode(rbf_node.RBFNode):
             r = om.MEulerRotation(mc.getAttr("{}.rotate".format(driven))[0])
             lm.setTranslation(t, om.MSpace.kObject)
             lm.setRotation(r)
-            print(f"{driven=}, local: {t=}, {r=}")
+            # print(f"{driven=}, local: {t=}, {r=}")
 
             tm = om.MTransformationMatrix(lm.asMatrix() * opm.inverse())
             t = tm.translation(om.MSpace.kObject)
@@ -1485,4 +1568,95 @@ class RBFNode(rbf_node.RBFNode):
 
             mc.setAttr("{}.translate".format(driven), *t)
             mc.setAttr("{}.rotate".format(driven), *r)
-            print(f"{driven=}, offset: {t=}, {r=}")
+            # print(f"{driven=}, offset: {t=}, {r=}")
+
+
+# ----------------------------------------------------------------------------
+# FBX Utility
+# ----------------------------------------------------------------------------
+def modify_fbx_file_to_add_key(fbx_path, key_info):
+    # type: (Text, Dict[Text, Dict[Text, List[List[float]]]]) -> None
+    """modify fbx file to add key."""
+    sdk_manager, fbx_scene = FbxCommon.InitializeSdkObjects()
+
+    result = FbxCommon.LoadScene(sdk_manager, fbx_scene, fbx_path)
+    if not result:
+        print("An error occurred while loading the scene...")
+        return
+
+    _root = fbx_scene.GetRootNode()
+    time = fbx.FbxTime(0)
+    for node, attr_keys in key_info.items():
+
+        for attr, keys in attr_keys.items():
+            curve_x = __get_or_create_curve(fbx_scene, node, attr, "X")
+            curve_y = __get_or_create_curve(fbx_scene, node, attr, "Y")
+            curve_z = __get_or_create_curve(fbx_scene, node, attr, "Z")
+
+            curve_x.KeyModifyBegin()
+            curve_y.KeyModifyBegin()
+            curve_z.KeyModifyBegin()
+
+            for i, value in enumerate(keys):
+                time.SetFrame(i)
+                __add_key_to_curve(curve_x, time, value[0])
+                __add_key_to_curve(curve_y, time, value[1])
+                __add_key_to_curve(curve_z, time, value[2])
+
+            curve_x.KeyModifyEnd()
+            curve_y.KeyModifyEnd()
+            curve_z.KeyModifyEnd()
+
+    anim_stack = fbx_scene.GetSrcObject(fbx.FbxCriteria.ObjectType(fbx.FbxAnimStack.ClassId), 0)
+    span = fbx.FbxTimeSpan(fbx.FbxTime(0), time)
+    anim_stack.SetLocalTimeSpan(span)
+    global_settings = fbx_scene.GetGlobalSettings()
+    global_settings.SetTimelineDefaultTimeSpan(span)
+
+    FbxCommon.SaveScene(sdk_manager, fbx_scene, fbx_path)
+
+    sdk_manager.Destroy()
+
+
+def __get_or_create_curve(scene, target_name, attr, component):
+    # type: (fbx.FbxScene, Text, Text, Text) -> fbx.FbxAnimCurve
+    """Get or create curve."""
+
+    anim_stacks = scene.GetSrcObjectCount(fbx.FbxCriteria.ObjectType(fbx.FbxAnimStack.ClassId))
+    if anim_stacks == 0:
+        raise Exception("no animation stack found")
+
+    node = scene.FindNodeByName(target_name)
+    if not node:
+        raise Exception("node not found: %s" % target_name)
+
+    # anim stack means animation clip
+    anim_stack = scene.GetSrcObject(fbx.FbxCriteria.ObjectType(fbx.FbxAnimStack.ClassId), 0)
+    anim_layers = anim_stack.GetMemberCount(fbx.FbxCriteria.ObjectType(fbx.FbxAnimLayer.ClassId))
+    if anim_layers == 0:
+        print("no animation layer found")
+        return
+    if anim_layers > 1:
+        print("multiple animation layer found")
+
+    anim_layer = anim_stack.GetMember(fbx.FbxCriteria.ObjectType(fbx.FbxAnimLayer.ClassId), 0)
+
+    if attr.lower() == "translation":
+        curve = node.LclTranslation.GetCurve(anim_layer, component, True)
+    elif attr.lower() == "rotation":
+        curve = node.LclRotation.GetCurve(anim_layer, component, True)
+    else:
+        raise Exception("invalid attr %s", attr)
+
+    if not curve:
+        raise Exception("curve not found on %s, %s" % target_name, attr)
+
+    return curve
+
+
+def __add_key_to_curve(curve, time, value):
+    # type: (fbx.FbxAnimCurve, fbx.FbxTime, float) -> None
+    """Add key to curve."""
+
+    key = curve.KeyAdd(time)
+    curve.KeySet(key[0], time, value)
